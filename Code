@@ -1,0 +1,421 @@
+// constantes
+
+#define facilite 100       // 0: démarrage difficile - 100 : démarrage facile
+#define nbDeCasesASauter 3 // Représente la longueur possible du saut du dinosaure. Plus il est long plus c'est facile 
+#define limiteGauche 1     // Curseur gauche d'épaisseur sensible du dinosaure
+#define limiteDroite 2     // Curseur droit d'épaisseur sensible du dinosaure
+#define nombreNote 38      // Nombre de note de la phrase musicale (voir tableau de notes)
+#define longueurNote 2     // longueur de la note de musique (durée) en multiple de boucle
+#define bas 0
+#define haut 1
+// Câblage matériel
+#define boutonJump 13
+#define speaker 6
+#define RESET 7
+// Déboguage plus rapide à écrire
+#define sp Serial.print
+#define spln Serial.println
+
+// notes de musique
+// Le rapport des fréquences de deux notes à l’octave est de 2.
+// 12 demi-tons dans un octave. 
+// Le rapport de fréquence de deux demi-tons est
+// 2=r^12
+// r=racine douzième de 2
+const float r=pow(2,1.0/12); // r=1,059463094359295
+const float DO2=130.81;
+const float RE2=146.83;
+const float MI2=164.81;
+const float FA2=174.61;
+const float SOL2=196.0;
+const float LA2=220.0;
+const float SI2=246.94;
+const float DO3=261.63; 
+const float RE3=293.66;
+const float MI3=329.63;
+const float FA3=349.23;
+const float FA3d=369.99;
+const float SOL3=392.0;  // soit SOL3=LA3/r/r car deux demi-tons entre SOL3 et LA3
+const float LA3=440.0;
+const float SI3=493.88;  // soit SI3=LA3*r*r  car deux demi-tons entre LA3 et SI3
+const float DO4=523.25;
+const float RE4=587.33;
+const float MI4=659.29;
+const float FA4=698.46;
+const float SOL4=783.99;
+const float LA4=880.0;
+const float SI4=987.77;
+const float DO5=1046.5;
+const float RE5=1174.7;
+const float MI5=1318.5;
+const float FA5=1396.9;
+const float SOL5=1568.0;
+const float musique[nombreNote]={RE3,SI2,RE3,SOL2,RE3,SI2,RE3,SOL2,RE3,SI2,RE3,SOL2,MI3,DO3,MI3,SOL2,MI3,DO3,MI3,SOL2,MI3,DO3,MI3,SOL2,FA3d,SOL3,SOL3,SOL3,FA3d,MI3,RE3,RE3,RE3,SI2,SOL2,SOL2,SOL2,SOL2};
+
+// Bibliothèque de fonctions prédéfinies pour l'écran LCD (non I2C)
+#include <LiquidCrystal.h>
+// Instancie un objet nommé lcd de classe LiquidCrystal avec son câblage 
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+
+/************* SETUP **************/
+/** exéctutée une fois seulement **/
+/**********************************/
+
+void setup(){
+  // Configuration de la liaison serie
+  Serial.begin(38400);
+  // Câblage carte
+  pinMode(boutonJump,INPUT); // Entrée bouton jump
+  pinMode(speaker,OUTPUT); // Sortie bouton Speaker
+  lcd.begin(16,2);   // Initialisation du type d'écran 2 lignes par 16 caractères
+  // Génération d'une nouvelle séquence aléatoire grâce à une entrée analogique non câblée
+  randomSeed(analogRead(0)); // analogRead(0) est une valeur aléaoire due au bruit sur l'entrée non câblée
+  // Cliquez sur j'aime !
+  for(int i=0;i<2;i++){
+    lcd.setCursor(0,0);
+    lcd.print("     Please     ");
+    lcd.setCursor(0,1);
+    lcd.print(" Click On Like! ");
+    delay(500);
+    lcd.clear(); // On efface l'écran
+    delay(200);
+    if(digitalRead(boutonJump))break; // Sortie de la cinématique possible en pressant le bouton jump
+  }
+  // Appuyez pour sauter !
+  for(int i=0;i<3;i++){
+    lcd.setCursor(0,0);
+    lcd.print("  Press Button  ");
+    lcd.setCursor(0,1);
+    lcd.print("     To Jump    ");
+    delay(500);
+    lcd.clear(); // On efface l'écran
+    delay(200);
+    if(digitalRead(boutonJump))break; // Sortie de la cinématique possible en pressant le bouton jump
+  }  
+
+  // Message d'accueil : Jouons un peu ! mais pas trop...
+  lcd.setCursor(16,0);
+  lcd.print("Let's play a little!");
+  lcd.setCursor(21,1);
+  lcd.print("But not too much...");
+  // Défilement du message pour le fun (cinématique de jeu vidéo)
+  for (int positionCounter = 0; positionCounter < nombreNote; positionCounter++) {
+    tone(speaker,musique[positionCounter]);
+    lcd.scrollDisplayLeft();
+    delay(250);
+    if(digitalRead(boutonJump))break; // Sortie de la cinématique possible en pressant le bouton jump
+  }
+  noTone(speaker); // On coupe la musique en fin de ciématique de jeu
+  // Stockage des pictogrammes CGRAM
+  // Appel de la fonction qui génére les pictogrammes créé à partir du fichier Excel
+  // http://stiddsin.free.fr/explorer/Cours-TD-TP/07c-Jouons-un-peu-Arduino.xlsx
+  CGRAM();
+  lcd.clear(); // On efface l'écran
+  delay(1000); // A vos marques, prêt ? Partez !
+  afficheScore(0); // affichage du score à 0
+}
+
+
+/*************** LOOP ****************/
+/** Super loop while(1) de ARDUINO  **/
+/** Boucle sans fin du jeu jusqu'au **/
+/** RESET matériel provoqué par la  **/
+/** fonction nouvellePartie()       **/
+/*************************************/
+
+void loop(){
+  // Variables locales et locales statiques
+  bool positionPerso;           // Position du personnage haut ou bas
+  int positionCible1;           // La position peut éventuellement devenir négative
+  int positionCible2;
+  static bool memoBouton=0;     // Pour mémorisation du saut. Initialisée qu'une fois (static)
+  static byte longueurSaut=0;   // Pour mémorisation du saut. Initialisée qu'une fois (static)
+  static unsigned int boucle=0; // nb de boucle. Doit-être initialisée qu'une fois (static). 
+  static unsigned int score=0;  // score pour les points. Doit-être initialisée qu'une fois (static). 
+  if(!memoBouton){
+    tone(speaker,musique[(boucle/longueurNote)%(nombreNote-1)]);   // déroulement de toutes les notes (modulo nombreNote-1) à chaque longueurNote*boucle. Une note par durée d'une bouble.
+  }
+    // Redondance de la fonction acceleration() pour améliorer la jouabilité (ne pas louper d'appui pendant la temporisation logicielle)
+  acceleration();  // temporisation graduelle du jeu
+  if(memoBouton==0){                    // Lecture de la demande de saut seulement si le dinosaure est déjà 
+    memoBouton=digitalRead(boutonJump); // retombé au sol (sinon il peut rester toujours en haut)
+  }
+  if(memoBouton && longueurSaut<=nbDeCasesASauter){    // Limitation de la longueur de saut à  la valeur constante nbDeCasesASauter
+    tone(speaker,(musique[(boucle/longueurNote)%(nombreNote-1)])*2); // Monte la note d'un octave (fréquence*2) pendant le saut pour le fun
+    positionPerso=haut;
+    longueurSaut=longueurSaut+1;
+  }
+  else{
+    positionPerso=bas;
+    longueurSaut=0;
+    memoBouton=0; // On fait retomber le dinosaure. Il faudra rappuyer pour re-sauter
+  }
+  affichePersonnage(0,positionPerso); // Affichage du dinosaure en haut ou en bas. Premier paramètre pour évolution possible : avancement du dinosaure
+  // Redondance de la fonction acceleration() pour améliorer la jouabilité (ne pas louper d'appui pendant la temporisation logicielle)
+  acceleration();  // temporisation graduelle du jeu
+  if(memoBouton==0){                    // Lecture de la demande de saut seulement si le dinosaure est déjà 
+    memoBouton=digitalRead(boutonJump); // retombé au sol (sinon il peut rester toujours en haut)
+  }
+  // Défilement du décor
+  positionCible1=cible1(positionPerso); // Déplacement du cactus 1
+  positionCible2=cible2(positionPerso); // Déplacement du cactus 2
+
+  // Ordre important pour fluidifier : le && est une évaluation paraisseuse
+  while(!memoBouton && ((positionCible1<=limiteDroite && positionCible1>=limiteGauche) || (positionCible2<=limiteDroite && positionCible2>=limiteGauche))){ // Dinosaure en bas et cactus présent
+    gameOver(); // Si collision alors game over
+  }
+  // évaluation de l'évolution du score : grand cactus 2 ponts, petit cactus 1 point
+  if(memoBouton && ((positionCible1<=(limiteGauche+1) && positionCible1>=limiteGauche) || (positionCible2<(limiteGauche+1) && positionCible2>=limiteGauche))){
+    score=score+1;
+    afficheScore(score);   // Affiche le score
+  }  
+  // Redondance de la fonction acceleration() pour améliorer la jouabilité (ne pas louper d'appui pendant la temporisation logicielle)
+  acceleration();  // temporisation graduelle du jeu
+  if(memoBouton==0){                    // Lecture de la demande de saut seulement si le dinosaure est déjà 
+    memoBouton=digitalRead(boutonJump); // retombé au sol (sinon il peut rester toujours en haut)
+  }
+  boucle=boucle+1; // Compteur de boucle
+}
+
+
+
+/***************** CGRAM ******************/
+/** creation des pictogramme dans le LCD **/
+/******************************************/
+
+// Coller la fonction CGRAM ci-dessous
+void CGRAM(void){																									
+  byte pictogramme0[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme0																									
+    0,	0,	0,	0,	4,	6,	7,	7																		
+  };																									
+  byte pictogramme1[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme1																									
+    0,	0,	0,	0,	0,	0,	0,	17																		
+  };																									
+  byte pictogramme2[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme2																									
+    7,	13,	15,	15,	15,	15,	31,	31																		
+  };																									
+  byte pictogramme3[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme3																									
+    30,	31,	31,	31,	16,	30,	0,	0																		
+  };																									
+  byte pictogramme4[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme4																									
+    3,	1,	0,	0,	0,	0,	0,	0																		
+  };																									
+  byte pictogramme5[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme5																									
+    31,	31,	31,	31,	15,	6,	2,	3																		
+  };																									
+  byte pictogramme6[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme6																									
+    31,	30,	30,	28,	24,	16,	16,	24																		
+  };																									
+  byte pictogramme7[8] = {  //  Création d’un tableau de 8 octets nommé pictogramme7																									
+    24,	8,	0,	0,	0,	0,	0,	0																		
+  };																									
+  lcd.createChar(0, pictogramme0); //  Écriture en CGRAM du pictogramme 0																									
+  lcd.createChar(1, pictogramme1); //  Écriture en CGRAM du pictogramme 1																									
+  lcd.createChar(2, pictogramme2); //  Écriture en CGRAM du pictogramme 2																									
+  lcd.createChar(3, pictogramme3); //  Écriture en CGRAM du pictogramme 3																									
+  lcd.createChar(4, pictogramme4); //  Écriture en CGRAM du pictogramme 4																									
+  lcd.createChar(5, pictogramme5); //  Écriture en CGRAM du pictogramme 5																									
+  lcd.createChar(6, pictogramme6); //  Écriture en CGRAM du pictogramme 6																									
+  lcd.createChar(7, pictogramme7); //  Écriture en CGRAM du pictogramme 7																									
+}																									
+
+
+
+/************* AFFICHEPERSONNAGE **************/
+/***** récupère la position haut ou bas *******/
+/***** récupère x pour evolution LEVEL  *******/
+/**********************************************/
+
+// Fonction affichePersonnage
+void affichePersonnage(byte x,bool y){
+  if(y==bas){
+//    tone(speaker,220);
+    lcd.setCursor(x,0);         // Curseur (x POUR DIFFICULTE)*************************
+    lcd.write((unsigned char)0);// Affichage du pictogramme 0 : la queue
+    lcd.write(1);               // Affichage du pictogramme 1 : queue et cou
+    lcd.write(2);               // Affichage du pictogramme 2 : l'œil
+    lcd.write(3);               // Affichage du pictogramme 3 : la bouche
+    lcd.setCursor(x,1);         // Curseur
+    lcd.write(4);               // Affichage du pictogramme 4 : début de la queue
+    lcd.write(5);               // Affichage du pictogramme 5 : jambe gauche
+    lcd.write(6);               // Affichage du pictogramme 6 : jambe droite
+    lcd.write(7);               // Affichage du pictogramme 7 : le bras
+  }
+  else{
+//    tone(speaker,440);
+    lcd.setCursor(x,1);         // Curseur
+    lcd.print(" ");             // effacement en bas du début de la queue
+    lcd.print(" ");             // effacement en bas de la jambe gauche
+    lcd.print(" ");             // effacement en bas de la jambe droite
+    lcd.print(" ");             // effacement en bas du bras
+    lcd.setCursor(x,0);         // Curseur
+    lcd.write(4);               // Affichage du pictogramme 4 : début de la queue
+    lcd.write(5);               // Affichage du pictogramme 5 : jambe gauche
+    lcd.write(6);               // Affichage du pictogramme 6 : jambe droite
+    lcd.write(7);               // Affichage du pictogramme 7 : le bras
+  } 
+}
+
+
+
+/************** CIBLES ************* */
+/* retourne le curseur x de la cible */
+/** int car x peut devenir négatif ***/
+/*************************************/
+
+int cible1(bool PersoHaut){
+  static int x=random(15,20); // Apparition aléatoire. x peut être négative
+  lcd.setCursor(x,1);
+  if(x>3){
+    lcd.print(" ");      // Effacement rémanence
+  }
+  else if(x<=3 && !PersoHaut){
+    lcd.write((unsigned char)x+4); // Réécriture du bas du dyno
+  }
+  if(x>=0){
+    x=x-1;
+    lcd.setCursor(x,1);
+    lcd.write(221);  // Affichage du caractère prédéfini le cactus1
+  }
+  else{
+    x=random(15,20); // Apparition aléatoire
+  }
+  return x;
+}
+
+int cible2(bool PersoHaut){
+  static int x=random(25,30); // Apparition aléatoire. x peut être négative
+  lcd.setCursor(x,1);
+  if(x>3){
+    lcd.print(" ");      // Effacement rémanence
+  }
+  else if(x<=3 && !PersoHaut){
+    lcd.write((unsigned char)x+4); // Réécriture du bas du dyno
+  }
+  if(x>=0){
+    x=x-1;
+    lcd.setCursor(x,1);
+    lcd.write(243);  // Affichage du caractère prédéfini le cactus2
+  }
+  else{
+    x=random(25,30); // Apparition aléatoire
+  }
+  return x;
+}
+
+
+/******* AFFICHESCORE *******/
+/*** récupère et affiche  ***/
+/*******  le score **********/
+/****************************/
+
+void afficheScore(int score){
+  lcd.setCursor(6,0);
+  lcd.print("Score:");
+  if(score<10){     // Affichage des 0 non significatifs
+    lcd.print("00"); // pour formater les score à 3 digits ex : 008 
+  }
+  else if(score<100){
+    lcd.print("0");
+  }
+  lcd.print(score);
+}
+
+
+/************ NOUVELLEPARTIE ************/
+/**** il faut une résistance entre ******/
+/******* la broche 12 et Reset **********/
+/****************************************/
+
+void nouvellePartie(void) 
+{  
+  for(int i=0;i<3;i++){
+    lcd.clear();
+    lcd.setCursor(0,0),
+    lcd.print("       New      ");
+    lcd.setCursor(0,1),
+    lcd.print("      Game!     ");
+    delay(500);
+    lcd.clear();
+    delay(200);
+  }
+  pinMode(RESET, OUTPUT);    // Ne pas mettre dans le Setup car active le RESET
+  digitalWrite(RESET, LOW);  // Active le Reset Hard forçant la sortie au niveau bas 
+}
+
+
+/************ GAMEOVER ************/
+/**** affiche game over ***********/
+/******* et appelle le reset ******/
+/******* nouvelle partie **********/
+/**********************************/
+
+void gameOver(void){
+  noTone(speaker);  // Coupe le son
+  lcd.setCursor(4,1);
+  lcd.print("  Game Over ");  // Affichage Game Over
+  delay(500);
+  if(digitalRead(boutonJump)){
+    nouvellePartie();  // Reset Hard pour nouvelle partie
+  }
+  lcd.setCursor(4,1);
+  lcd.print("            ");  // Clignotement Game Over
+  delay(200);
+  if(digitalRead(boutonJump)){
+    nouvellePartie();  // Reset Hard pour nouvelle partie
+  }
+  lcd.setCursor(4,1);
+  lcd.print("Press Button");  // Affichage Game Over
+  delay(500);
+  if(digitalRead(boutonJump)){
+    nouvellePartie();  // Reset Hard pour nouvelle partie
+  }
+  lcd.setCursor(4,1);
+  lcd.print("            ");  // Clignotement Game Over
+  delay(200);
+  if(digitalRead(boutonJump)){
+    nouvellePartie();  // Reset Hard pour nouvelle partie
+  }
+}
+
+
+/*********** ACCELERATION **********/
+/****** temporise le jeu pour ******/
+/********* plus de facilite ********/
+/** utilise la #define difficulte **/
+/***********************************/
+
+void acceleration(void){
+  static unsigned int variation=0; // Pour accélérer le jeu toutes les variation*boucle 
+  static unsigned int vitesse=0;   // Pour moduler la vitesse du jeu  
+  if(variation==10){       // Pour ne pas que cela s'exécute pas à chaque fois
+    if(vitesse<facilite){ // facilité est une constante définie au début du programme
+      vitesse=vitesse+1;
+    }
+    variation=0;
+  }
+  delay((facilite-vitesse)+1); // plus un pour ne jamais que ce soit égal à 0
+  variation=variation+1;
+}
+
+
+// pour amélioration ultérieure afin d'éviter les tempos logicielles
+/*********** mesureIntervalleDeTemps **********/
+/************* Fonction qui mesure ************/
+/******** l’intervalle de temps écoulé ********/
+/******* entre deux appels consécutifs ********/
+/**********************************************/
+
+long mesureIntervalleDeTemps(){
+  // Déclaration d’une variable locale statique nommée lastMillis réservée en RAM
+  static long lastMillis=0; 
+  // Déclaration d’une variable locale nommée now en pile LIFO
+  long now = millis();
+   // Déclaration d’une variable locale nommée intervalle en pile LIFO
+  long intervalle= now-lastMillis;
+  // La valeur de lastMillis perdurera entre chaque appel de cette fonction
+  lastMillis = now;
+  // La fonction retourne le résultat de l’intervalle de temps écoulé
+  return intervalle;
+}
